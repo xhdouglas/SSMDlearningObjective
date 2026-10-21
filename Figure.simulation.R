@@ -5,15 +5,14 @@
 #  (SSMD vs Fisher LDA vs logistic regression vs linear SVM)
 #
 #   Figure 2: equal covariance, independent groups, balanced
-#   Figure 3: heteroscedastic, class-imbalanced (1:4)
+#   Figure 3: heteroscedastic, oppositely tilted covariances, imbalanced (1:4)
 #   Figure 4: paired / correlated groups
 #
 # The published figures were drawn with the Python script
 # (Figure.simulation.py). This R script implements the same designs and
 # methods with R's random-number generator, so the simulated points --
 # and therefore the exact numbers (angles, AUROC, cutoffs, errors) --
-# differ slightly from the published figures; the qualitative pattern is
-# the same.
+# differ from the published figures; the qualitative pattern is the same.
 #
 # Notation follows the manuscript: X_g is the n_g x k data matrix of
 # group g, the projected scores are L_g = X_g beta, and in the paired
@@ -23,7 +22,14 @@
 # Usage:   Rscript Figure.simulation.R [output_dir]
 #          (run in a UTF-8 locale -- the default in R on macOS/Windows --
 #           so that the degree, approx-equal and Sigma glyphs render)
-# Output:  figure2_R.png, figure3_R.png, figure4_R.png
+# Output:  figure2_R, figure3_R, figure4_R as .tiff (183 mm wide, 600 dpi,
+#          LZW), .pdf (vector) and .png (preview); see save_fig() below
+#
+# Seeds: 123 (Fig. 2), 184 (Fig. 3), 204 (Fig. 4). Because R's generator
+# differs from Python's (seeds 123, 35, 7), the R seeds for Figs 3 and 4
+# were chosen so that the angles, AUROCs, cutoff errors and paired-SSMD
+# ordering are representative of the population pattern; Fig. 3 values lie
+# close to the Monte Carlo medians (Simulation2.montecarlo.R).
 # ==================================================================
 suppressPackageStartupMessages({
   library(MASS)       # mvrnorm
@@ -101,11 +107,45 @@ cutline_df <- function(b, cval, half = 6) {
 ## Arrow from the origin along b
 arrow_df <- function(b, len, method)
   data.frame(x = 0, y = 0, xend = b[1] * len, yend = b[2] * len, method = method)
-## PNG device: 'ragg' (if installed) gives reliable Unicode glyphs (degree,
-## approx-equal, Sigma with subscripts); otherwise fall back to the default
-save_png <- function(file, g, width, height) {
-  dev <- if (requireNamespace("ragg", quietly = TRUE)) ragg::agg_png else "png"
-  ggsave(file, g, width = width, height = height, dpi = 160, bg = "white", device = dev)
+## ---------------------------------------------------------------- export
+## Output follows the Nature Portfolio figure specifications:
+##   * width  = 183 mm (double column); height <= 170 mm (room for legend)
+##   * raster resolution >= 300 dpi at final size -- we use 600 dpi, the
+##     usual standard for graphs that contain text and thin lines
+##   * text 5-7 pt at final size
+## Each figure is laid out on a canvas of FINAL_WIDTH_MM / TEXT_SCALE
+## (about 256 mm) and printed at 183 mm, so all text and lines shrink by
+## TEXT_SCALE: the 7-pt legend text becomes 5 pt and the 10-pt panel titles
+## about 7 pt. The TIFF is written directly at the final size and
+## resolution (4323 pixels wide, resolution tag 600 dpi, LZW compression,
+## RGB). A vector PDF -- the format Nature prefers for graphs -- and a PNG
+## preview are written alongside.
+FINAL_WIDTH_MM <- 183
+MAX_HEIGHT_MM  <- 170
+DPI            <- 600
+TEXT_SCALE     <- 0.714
+if (!requireNamespace("ragg", quietly = TRUE))
+  stop("Package 'ragg' is required for the final-size TIFF/PNG output: install.packages('ragg')")
+save_fig <- function(stem, g, width, height) {
+  ## width, height: design aspect ratio (any units)
+  h_mm <- FINAL_WIDTH_MM * height / width
+  if (h_mm > MAX_HEIGHT_MM)
+    stop(sprintf("%s: final height %.0f mm exceeds %d mm", basename(stem), h_mm, MAX_HEIGHT_MM))
+  draw <- function() { grid::grid.newpage(); grid::grid.draw(g); invisible(dev.off()) }
+  ## TIFF at final size, 600 dpi, LZW compression
+  ragg::agg_tiff(paste0(stem, ".tiff"), width = FINAL_WIDTH_MM, height = h_mm, units = "mm",
+                 res = DPI, scaling = TEXT_SCALE, compression = "lzw", background = "white")
+  draw()
+  ## PNG preview with identical pixels
+  ragg::agg_png(paste0(stem, ".png"), width = FINAL_WIDTH_MM, height = h_mm, units = "mm",
+                res = DPI, scaling = TEXT_SCALE, background = "white")
+  draw()
+  ## vector PDF: page drawn at FINAL_WIDTH_MM / TEXT_SCALE, to be placed at 183 mm
+  grDevices::cairo_pdf(paste0(stem, ".pdf"), width = FINAL_WIDTH_MM / TEXT_SCALE / 25.4,
+                       height = h_mm / TEXT_SCALE / 25.4, bg = "white")
+  draw()
+  cat(sprintf("   %s: %.0f x %.0f mm at %d dpi = %d x %d pixels\n", basename(stem),
+              FINAL_WIDTH_MM, h_mm, DPI, floor(FINAL_WIDTH_MM / 25.4 * DPI), floor(h_mm / 25.4 * DPI)))
 }
 error_rate <- function(s, y, cval) mean(as.integer(s > cval) != y)
 auroc <- function(y, s) as.numeric(pROC::auc(y, s, quiet = TRUE, direction = "<"))
@@ -193,18 +233,21 @@ figure2 <- function() {
                    hist_panel(res$SSMD, "b"), hist_panel(res$LDA, "c"),
                    hist_panel(res$Logistic, "d"), hist_panel(res$SVM, "e"),
                    layout_matrix = rbind(c(1, 1, 1, 1), c(2, 3, 4, 5)), heights = c(1.15, 1))
-  save_png(file.path(OUT, "figure2_R.png"), g, width = 12.5, height = 9.6)
+  save_fig(file.path(OUT, "figure2_R"), g, width = 12.5, height = 9.6)
 }
 
 # ==================================================================
-# FIGURE 3 -- independent groups, unequal covariance, 1:4 imbalance
+# FIGURE 3 -- independent groups, unequal and oppositely tilted
+# covariances, 1:4 imbalance. The population directions of SSMD,
+# (Sigma1 + Sigma2)^-1 m, and pooled LDA, Sw^-1 m, differ by about 24 deg.
 # ==================================================================
-figure3 <- function() {
-  set.seed(11)
+FIG3_SEED <- 184   # R seed chosen to be representative of the 1,000-replicate medians
+figure3 <- function(seed = FIG3_SEED) {
+  set.seed(seed)
   n1 <- 80; n2 <- 320
   mu1 <- c(1.5, 0); mu2 <- c(-1.5, 0)
-  S1t <- matrix(c(0.5, 0, 0, 3.0), 2)          # tight along X1
-  S2t <- matrix(c(4.0, 0, 0, 0.5), 2)          # wide along X1
+  S1t <- matrix(c(0.5, -0.8, -0.8, 3.0), 2)    # tight along X1, tilted
+  S2t <- matrix(c(4.0, 1.2, 1.2, 1.0), 2)      # wide along X1, opposite tilt
   X1 <- mvrnorm(n1, mu1, S1t); X2 <- mvrnorm(n2, mu2, S2t)
   X  <- rbind(X1, X2); y <- c(rep(1, n1), rep(0, n2))
 
@@ -219,10 +262,21 @@ figure3 <- function() {
   ang <- sapply(c("LDA", "Logistic", "SVM"), function(m) angle_deg(beta$SSMD, beta[[m]]))
   cat(sprintf("Figure 3 angles: SSMD-LDA %.1f, SSMD-Logistic %.1f, SSMD-SVM %.1f\n",
               ang["LDA"], ang["Logistic"], ang["SVM"]))
+  ssmd_of <- function(b) {
+    sc <- as.numeric(X %*% b)
+    (mean(sc[y == 1]) - mean(sc[y == 0])) / sqrt(var(sc[y == 1]) + var(sc[y == 0]))
+  }
+  sdeg <- function(b) atan2(b[2], b[1]) * 180 / pi     # signed direction angle
+  st <- t(sapply(beta, function(b) c(auc = auroc(y, as.numeric(X %*% b)),
+                                     ssmd = ssmd_of(b), deg = sdeg(b))))
+  for (m in names(beta))
+    cat(sprintf("   %-9s AUROC=%.3f  SSMD of score=%.2f  angle=%+.1f deg\n",
+                m, st[m, "auc"], st[m, "ssmd"], st[m, "deg"]))
+  ## population values: AUROC = Phi(SSMD(beta)) for independent normal groups
   for (m in names(beta)) {
-    sc <- as.numeric(X %*% beta[[m]])
-    ss <- (mean(sc[y == 1]) - mean(sc[y == 0])) / sqrt(var(sc[y == 1]) + var(sc[y == 0]))
-    cat(sprintf("   %-9s AUROC=%.3f  SSMD of score=%.2f\n", m, auroc(y, sc), ss))
+    b  <- beta[[m]]
+    sp <- sum(b * (mu1 - mu2)) / sqrt(as.numeric(t(b) %*% (S1t + S2t) %*% b))
+    cat(sprintf("   %-9s population SSMD(beta)=%.3f  population AUROC=%.3f\n", m, sp, pnorm(sp)))
   }
 
   ## ---- cutoffs on the SSMD score
@@ -243,7 +297,7 @@ figure3 <- function() {
   ## Youden cutoff: distribution-free, maximizes sensitivity + specificity - 1
   roc_s  <- pROC::roc(y, s, quiet = TRUE, direction = "<")
   youden <- as.numeric(unlist(pROC::coords(roc_s, "best", best.method = "youden",
-                                    ret = "threshold")))[1]
+                                           ret = "threshold")))[1]
   ## empirical minimum of the overall error over all distinct cutoffs
   so   <- sort(s)
   cand <- c(so[1] - 1e-9, (so[-1] + so[-length(so)]) / 2, so[length(so)] + 1e-9)
@@ -259,18 +313,21 @@ figure3 <- function() {
   cat(sprintf("   empirical minimum error=%.4f for c in [%+.2f, %+.2f]\n",
               emp_min, min(emp_c), max(emp_c)))
 
-  ## ---- panel (a)
+  ## ---- panel a
   df <- data.frame(x1 = X[, 1], x2 = X[, 2], g = factor(y))
-  arrows <- do.call(rbind, lapply(names(beta), function(m) arrow_df(beta[[m]], 2.7, m)))
+  arrows <- do.call(rbind, lapply(names(beta), function(m) arrow_df(beta[[m]], 3.2, m)))
   cut_y  <- cbind(cutline_df(beta$SSMD, youden, 6.0),
                   type = sprintf("Youden cutoff (c=%+.2f)", youden))
   cut_b  <- cbind(cutline_df(beta$SSMD, bayes, 6.0),
                   type = sprintf("Bayes cutoff, Gaussian model (c=%+.2f)", bayes))
   cuts <- rbind(cut_y, cut_b)
   cuts$type <- factor(cuts$type, levels = c(cut_y$type, cut_b$type))
-  labs <- data.frame(x = 3.0, y = c(1.55, 1.15, 0.75, 0.35),
-                     lab = c("SVM", "SSMD (≈ SVM)", "Logistic", "LDA (pooled)"),
-                     method = c("SVM", "SSMD", "Logistic", "LDA"))
+  ord  <- names(beta)[order(-st[, "deg"])]      # label order = arrow order, top to bottom
+  lab_txt <- c(SSMD = "SSMD  (S1+S2)^-1 m", LDA = "LDA  Sp^-1 m (pooled)",
+               Logistic = "Logistic", SVM = "SVM")
+  labs <- data.frame(x = 3.5, y = 2.3 - 0.75 * (seq_along(ord) - 1),
+                     lab = sprintf("%s  (%+.1f°)", lab_txt[ord], st[ord, "deg"]),
+                     method = ord)
   pa <- ggplot() +
     geom_point(data = df[df$g == "0", ], aes(x1, x2, colour = g), alpha = 0.45, size = 1.2) +
     geom_point(data = df[df$g == "1", ], aes(x1, x2, colour = g), alpha = 0.55, size = 1.2) +
@@ -283,19 +340,19 @@ figure3 <- function() {
                  colour = ifelse(grepl("Youden", cuts$type), COL_YOUDEN, COL_BAYES),
                  linewidth = 0.9) +
     geom_text(data = labs, aes(x, y, label = lab), colour = METHOD_COLS[labs$method],
-              hjust = 0, fontface = "bold", size = 3.6) +
+              hjust = 0, fontface = "bold", size = 3.4) +
     scale_colour_manual(values = GROUP_COLS, breaks = c("1", "0"),
                         labels = c(sprintf("G1 (class 1, n=%d)", n1),
                                    sprintf("G2 (class 0, n=%d)", n2)), name = NULL) +
     scale_linetype_manual(values = c("dashed", "solid"), name = NULL) +
-    coord_cartesian(xlim = c(-7.5, 7.5), ylim = c(-5.3, 5.3)) +
-    labs(x = expression(X[1]), y = expression(X[2]),
-         title = sprintf("(a) Directions (arrows) and the two heteroscedasticity-aware cutoffs on the SSMD axis\nangles - SSMD-LDA %.1f°,  SSMD-Logistic %.1f°,  SSMD-SVM %.1f°",
+    coord_cartesian(xlim = c(-8, 8.5), ylim = c(-5.3, 5.3)) +
+    labs(x = expression(X[1]), y = expression(X[2]), tag = "a",
+         title = sprintf("angles - SSMD-LDA %.1f°,  SSMD-Logistic %.1f°,  SSMD-SVM %.1f°",
                          ang["LDA"], ang["Logistic"], ang["SVM"])) +
-    theme(legend.position = c(0.17, 0.82), legend.background = element_rect(colour = "grey80"),
-          legend.spacing.y = unit(0, "pt"))
+    theme(legend.position = c(0.15, 0.84), legend.background = element_rect(colour = "grey80"),
+          legend.spacing.y = unit(0, "pt"), plot.title = element_text(face = "plain", size = 11))
 
-  ## ---- panel (b) score histograms with the three cutoffs
+  ## ---- panel b: score histograms with the three cutoffs
   ds <- data.frame(score = s, g = factor(y))
   pb <- ggplot(ds, aes(score, fill = g)) +
     geom_histogram(aes(y = after_stat(density)), alpha = 0.6, position = "identity", bins = 25) +
@@ -303,57 +360,89 @@ figure3 <- function() {
     geom_vline(xintercept = youden, colour = COL_YOUDEN, linetype = "dashed", linewidth = 0.8) +
     geom_vline(xintercept = bayes, colour = COL_BAYES, linewidth = 1.0) +
     annotate("text", x = mid - 0.2, y = Inf, vjust = 1.3, hjust = 1, size = 2.6,
-             colour = "grey45", label = sprintf("midpoint (invalid)\nc=%+.2f", mid)) +
+             colour = "grey45", label = sprintf("midpoint\nc=%+.2f", mid)) +
     annotate("text", x = youden - 0.1, y = Inf, vjust = 4.5, hjust = 1, size = 2.8,
              colour = COL_YOUDEN, label = sprintf("Youden\nc=%+.2f", youden)) +
     annotate("text", x = bayes + 0.15, y = Inf, vjust = 1.3, hjust = 0, size = 2.9,
              colour = COL_BAYES, fontface = "bold", label = sprintf("Bayes\nc=%+.2f", bayes)) +
     scale_fill_manual(values = GROUP_COLS, breaks = c("1", "0"),
                       labels = c(expression(G[1]), expression(G[2])), name = NULL) +
-    labs(x = "projected score L (SSMD direction)", y = "density",
-         title = sprintf("(b) SSMD score: unequal variances (%.2f vs %.2f)", v1, v2)) +
+    labs(x = "projected score L (SSMD direction)", y = "density", tag = "b",
+         title = sprintf("SSMD score: variances %.2f vs %.2f", v1, v2)) +
     theme(legend.position = c(0.1, 0.5), plot.title = element_text(face = "plain", size = 10))
 
-  ## ---- panel (c) overall error vs cutoff
+  ## ---- panel c: overall error vs cutoff
   cs <- seq(min(s), max(s), length.out = 400)
   de <- data.frame(c = cs, err = sapply(cs, function(cc) error_rate(s, y, cc)))
-  pts <- data.frame(c = c(youden, bayes, emp_pt),
-                    err = c(error_rate(s, y, youden), error_rate(s, y, bayes), emp_min),
-                    what = factor(c(sprintf("Youden: %.1f%%", 100 * error_rate(s, y, youden)),
-                                    sprintf("Bayes: %.1f%%", 100 * error_rate(s, y, bayes)),
-                                    sprintf("empirical minimum: %.2f%%", 100 * emp_min)),
-                                  levels = c(sprintf("Youden: %.1f%%", 100 * error_rate(s, y, youden)),
-                                             sprintf("Bayes: %.1f%%", 100 * error_rate(s, y, bayes)),
-                                             sprintf("empirical minimum: %.2f%%", 100 * emp_min))))
-  ym <- max(de$err)
+  lv <- c(sprintf("midpoint: %.1f%%", 100 * error_rate(s, y, mid)),
+          sprintf("Youden: %.1f%%",   100 * error_rate(s, y, youden)),
+          sprintf("Bayes: %.1f%%",    100 * error_rate(s, y, bayes)),
+          sprintf("minimum: %.2f%%", 100 * emp_min))
+  pts <- data.frame(c = c(mid, youden, bayes, emp_pt),
+                    err = c(error_rate(s, y, mid), error_rate(s, y, youden),
+                            error_rate(s, y, bayes), emp_min),
+                    what = factor(lv, levels = lv))
   pc <- ggplot(de, aes(c, err)) +
     geom_line(linewidth = 0.7) +
     geom_vline(xintercept = mid, colour = "grey45", linetype = "dotted") +
     geom_vline(xintercept = youden, colour = COL_YOUDEN, linetype = "dashed") +
     geom_vline(xintercept = bayes, colour = COL_BAYES, linewidth = 0.9) +
-    annotate("text", x = mid - 0.3, y = ym, hjust = 1, vjust = 1, size = 2.8,
-             colour = "grey45", label = "midpoint") +
-    annotate("text", x = youden - 0.3, y = ym * 0.87, hjust = 1, vjust = 1, size = 2.8,
-             colour = COL_YOUDEN, label = "Youden") +
-    annotate("text", x = bayes + 0.3, y = ym * 0.75, hjust = 0, vjust = 1, size = 2.8,
-             colour = COL_BAYES, label = "Bayes (Gaussian model)") +
-    geom_point(data = data.frame(c = mid, err = error_rate(s, y, mid)), colour = "grey45", size = 2) +
-    geom_point(data = pts, aes(colour = what, shape = what), size = 2.4) +
-    scale_colour_manual(values = c(COL_YOUDEN, COL_BAYES, "black"), name = NULL) +
-    scale_shape_manual(values = c(16, 16, 25), name = NULL) +
-    labs(x = "cutoff c", y = "error rate", title = "(c) Overall error vs cutoff on the SSMD score") +
-    theme(legend.position = c(0.8, 0.85), legend.background = element_rect(colour = "grey80"),
+    geom_point(data = pts, aes(colour = what, shape = what, fill = what), size = 2.4) +
+    scale_colour_manual(values = c("grey45", COL_YOUDEN, COL_BAYES, "black"), name = NULL) +
+    scale_fill_manual(values = c("grey45", COL_YOUDEN, COL_BAYES, "black"), name = NULL) +
+    scale_shape_manual(values = c(16, 16, 16, 25), name = NULL) +
+    labs(x = "cutoff c", y = "error rate", tag = "c",
+         title = "Overall error vs cutoff (SSMD score)") +
+    guides(colour = guide_legend(ncol = 2), fill = guide_legend(ncol = 2), shape = guide_legend(ncol = 2)) +
+    theme(legend.position = "bottom", legend.text = element_text(size = 7),
+          legend.margin = margin(0, 0, 0, 0), plot.title = element_text(face = "plain", size = 10))
+
+  ## ---- panel d: SSMD and AUROC of the projected score vs direction angle
+  th   <- seq(-60, 30, by = 0.25)
+  scan <- t(sapply(th * pi / 180, function(t) {
+    v <- c(cos(t), sin(t))
+    c(ssmd = ssmd_of(v), auc = auroc(y, as.numeric(X %*% v)))
+  }))
+  dscan <- data.frame(deg = th, scan)
+  ## map AUROC onto the SSMD axis for a secondary axis
+  r_s <- range(dscan$ssmd); r_a <- range(dscan$auc)
+  k   <- diff(r_s) / diff(r_a)
+  to_s   <- function(a) r_s[1] + (a - r_a[1]) * k
+  from_s <- function(s) r_a[1] + (s - r_s[1]) / k
+  mk <- data.frame(deg = st[, "deg"], val = st[, "ssmd"], method = rownames(st),
+                   what = sprintf("%s: %.2f / %.3f", rownames(st), st[, "ssmd"], st[, "auc"]))
+  mk$what <- factor(mk$what, levels = mk$what)
+  curves <- rbind(data.frame(deg = dscan$deg, val = dscan$ssmd, curve = "SSMD of projected score"),
+                  data.frame(deg = dscan$deg, val = to_s(dscan$auc), curve = "AUROC (right axis)"))
+  curves$curve <- factor(curves$curve, levels = unique(curves$curve))
+  pd <- ggplot() +
+    geom_line(data = curves, aes(deg, val, linetype = curve, colour = curve), linewidth = 0.8) +
+    geom_vline(data = mk, aes(xintercept = deg), colour = METHOD_COLS[mk$method], linewidth = 0.6) +
+    geom_point(data = mk, aes(deg, val, fill = what), shape = 21, size = 2.6, colour = "white") +
+    scale_linetype_manual(values = c("solid", "dashed"), name = NULL) +
+    scale_colour_manual(values = c("black", "grey45"), name = NULL) +
+    scale_fill_manual(values = unname(METHOD_COLS[mk$method]), name = NULL) +
+    scale_x_continuous(limits = c(-60, 30), expand = c(0, 0)) +
+    scale_y_continuous(sec.axis = sec_axis(~ from_s(.), name = "AUROC")) +
+    labs(x = "projection-direction angle (degrees)", y = "SSMD", tag = "d",
+         title = "SSMD and AUROC vs direction") +
+    guides(linetype = guide_legend(order = 1, nrow = 1), colour = guide_legend(order = 1, nrow = 1),
+           fill = guide_legend(order = 2, ncol = 2, title = "direction: SSMD / AUROC",
+                               title.position = "top", title.theme = element_text(size = 7))) +
+    theme(legend.position = "bottom", legend.box = "vertical", legend.text = element_text(size = 7),
+          legend.margin = margin(0, 0, 0, 0), legend.spacing.y = unit(0, "pt"),
           plot.title = element_text(face = "plain", size = 10))
 
-  g <- arrangeGrob(pa, pb, pc, layout_matrix = rbind(c(1, 1), c(2, 3)), heights = c(1.3, 1))
-  save_png(file.path(OUT, "figure3_R.png"), g, width = 13, height = 9.2)
+  g <- arrangeGrob(pa, pb, pc, pd, layout_matrix = rbind(c(1, 1, 1), c(2, 3, 4)),
+                   heights = c(1.25, 1.1))
+  save_fig(file.path(OUT, "figure3_R"), g, width = 15, height = 10.2)
 }
 
 # ==================================================================
 # FIGURE 4 -- paired design: the same n subjects under two conditions
 # ==================================================================
 figure4 <- function() {
-  set.seed(7)
+  set.seed(204)   # R seed representative of the population pattern
   n <- 150
   mu1 <- c(1.2, 0.3); mu2 <- c(-1.0, -0.2)
   Sigma1  <- matrix(c(1.0, 0.3, 0.3, 0.6), 2)
@@ -488,11 +577,11 @@ figure4 <- function() {
           plot.title = element_text(face = "plain", size = 10))
 
   g <- arrangeGrob(pa, pb, pc, layout_matrix = rbind(c(1, 1), c(2, 3)), heights = c(1.3, 1))
-  save_png(file.path(OUT, "figure4_R.png"), g, width = 13, height = 9.2)
+  save_fig(file.path(OUT, "figure4_R"), g, width = 13, height = 9.2)
 }
 
 figure2()
 figure3()
 figure4()
 invisible(dev.off())
-cat("saved figure2_R.png, figure3_R.png, figure4_R.png to", normalizePath(OUT), "\n")
+cat("saved figure2_R, figure3_R, figure4_R (.tiff, .pdf, .png) to", normalizePath(OUT), "\n")

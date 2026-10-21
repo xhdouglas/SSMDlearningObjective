@@ -1,1 +1,1 @@
-Python and R code for generating Figures 2–4 of the manuscript “Strictly Standardized Mean Difference as a Learning Objective for Interpretable Machine Learning.” These correspond to Figures 1–3 in the preprint arXiv:2609.11981.
+R code for generating Figures 2–4 of the manuscript “Strictly Standardized Mean Difference as a Learning Objective for Interpretable Machine Learning.” These correspond to Figures 1–3 in the preprint arXiv:2609.11981.
